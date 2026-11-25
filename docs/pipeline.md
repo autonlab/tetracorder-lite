@@ -4,8 +4,12 @@ The whole pipeline runs from a single YAML config. `tetrapy run` executes the
 enabled stages in order:
 
 ```
-export_matrix → convolve → sensor → setup → tetrun → postprocess → aggregate
+export_matrix → convolve → sensor → setup → per_reference → tetrun → postprocess → aggregate
 ```
+
+!!! note "EDITED 11/24/2027"
+    `per_reference` is a new optional stage, off unless `per_reference.enabled` is set
+    (a config without the section skips it). See [`per_reference`](#per_reference).
 
 Each stage is gated by its own `{stage}.enabled` flag in the config, so any
 stage can be skipped. The stage functions live in [`tetrapy.pipeline`][], which
@@ -31,6 +35,7 @@ tetrapy export-matrix config.yml   # decode expert system -> material matrix CSV
 tetrapy convolve      config.yml   # convolve reference/research libraries to scene grid
 tetrapy sensor        config.yml   # wire convolved library into the command tree
 tetrapy setup         config.yml   # configure a Tetracorder run (cmd-setup-tetrun)
+tetrapy per-reference config.yml   # group 2 fit/depth/fd of every reference (EDITED 11/24/2027)
 tetrapy tetrun        config.yml   # execute the run (cmd.runtet)
 tetrapy postprocess   config.yml   # write COGs and prune the run directory
 tetrapy aggregate     config.yml   # aggregate outputs into L2B products
@@ -48,6 +53,7 @@ work. See [`tetrapy.pipeline`][] for the full docstrings.
 | [`convolve`](#convolve) | Gaussian-convolve reference/research libraries to the scene grid | [`tetrapy.conv`][] / [`tetrapy.tetra`][] |
 | [`sensor`](#sensor) | Integrate the convolved library into the command tree | [`tetrapy.sensor`][] |
 | [`setup`](#setup) | Configure a Tetracorder run (`cmd-setup-tetrun`) | [`tetrapy.tetra`][] |
+| [`per_reference`](#per_reference) | (EDITED 11/24/2027) Optional: fit, depth and fd of every group 2 reference | [`tetrapy.per_reference`][] |
 | [`tetrun`](#tetrun) | Execute the run (`cmd.runtet`) | [`tetrapy.tetra`][] |
 | [`postprocess`](#postprocess) | Convert matched outputs into COGs and/or delete matched paths | [`tetrapy.postprocess`][] |
 | [`aggregate`](#aggregate) | Aggregate outputs into L2B mineral/uncertainty products | [`tetrapy.aggregate`][] |
@@ -185,6 +191,45 @@ by [`tetrapy.tetra.setup_tetrun`][].
     Any pre-existing `output.tetracorder` directory is removed entirely before
     setup (`cmd-setup-tetrun` requires a fresh directory), so don't point it at
     a location holding data you want to keep.
+
+### `per_reference`
+
+!!! note "EDITED 11/24/2027"
+    New section, for the new optional stage.
+
+Write every group 2 reference's own fit, depth and fd at every pixel. A normal run
+keeps only each group's best reference (`tp1all.r` zeroes the others before writing),
+so this stage copies the `setup` run folder once per batch of references, edits each
+copy's command file so every batch reference sits alone in a free group number, runs
+Tetracorder in each copy, and collects the images. The Tetracorder program and the
+`setup` run folder are not changed. Backed by [`tetrapy.per_reference.run`][]; the
+full description, the outputs and the check against an independent run are in the
+README section "Per-reference outputs (group 2)".
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Whether the stage runs (default `False`). |
+| `tetracorder` | str | The run folder made by `setup` (typically `${output.tetracorder}`); copied, never changed. |
+| `output` | str | Results folder; must be empty or absent. |
+| `mode` | str | `lean` (default) or `conservative`, below. |
+| `jobs` | int | Tetracorder runs at the same time (default 1). |
+| `keep_runs` | bool | Keep the per-batch run folders under `output/runs/` (default `False`). |
+
+Modes. Tetracorder allows 50 groups and the stock command file uses 22, so 28 group
+numbers are free.
+
+- `lean`: up to 28 references per run (8 runs for group 2). Kept on: the batch
+  references and every entry one of their NOT tests refers to (followed through the
+  entries those refer to); every other entry gets `use= no`; a referenced group 0
+  entry is moved into group 2 so nothing of group 0 competes with the batch. Fast.
+- `conservative`: up to 19 references per run (11 runs). Nothing is switched off or
+  moved except the batch references, whose new group numbers are added to the
+  80-column `nogroup0:` line (hence 19). Slow; for checking that `lean` gives the
+  same numbers.
+
+Outputs: `group2/<name>.{fit,depth,fd}.gz` (Tetracorder's bytes), `group2_fd` +
+`.hdr` (200-band uint8 BIP fd cube, band k = reference k in command-file order),
+`group2_references.csv`, `summary.json`, `logs/`.
 
 ### `tetrun`
 

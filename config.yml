@@ -76,6 +76,16 @@ setup:
   enabled: True
   geology: False
   args: ["1", "-T", "-20", "80", "C", "-P", ".5", "1.5", "bar"]
+# EDITED 11/24/2027: optional per-reference stage (group 2 only). Runs after setup and
+# before tetrun; writes every group 2 reference's fit, depth and fd (a normal run keeps only
+# each group's best). See README "Per-reference outputs (group 2)".
+per_reference:
+  enabled: False
+  tetracorder: ${output.tetracorder}  # the run folder made by setup (copied, not changed)
+  output: ${output.base}/per_reference
+  mode: lean                          # lean (up to 28 references per run) | conservative (up to 19, nothing switched off)
+  jobs: 1                             # Tetracorder runs at the same time
+  keep_runs: False                    # keep the per-batch run folders under output/runs/
 tetrun:
   enabled: True
   args: ["band", "20", "gif"]

@@ -48,6 +48,11 @@ Load and operate on just one subsection of the file with `-s/--section`.
 
 ## Default config
 
+!!! note "EDITED 11/24/2027"
+    The default config now has a `per_reference` section (optional stage, `enabled:
+    False`): `tetracorder` (the `setup` run folder), `output`, `mode` (`lean` |
+    `conservative`), `jobs`, `keep_runs`. See [Pipeline → `per_reference`](pipeline.md#per_reference).
+
 This is the `config.yml` baked into the container image (at `/root/config.yml`,
 the working directory). It is included here directly from the repository when
 the docs are built, so it always matches the release you are reading.

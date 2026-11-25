@@ -9,9 +9,12 @@ The individual stages are also exposed as standalone ``tetrapy`` subcommands (se
 ``--help`` text.
 
 Stage order, as run by ``tetrapy run``:
-``export_matrix`` -> ``convolve`` -> ``sensor`` -> ``setup`` -> ``tetrun`` ->
-``postprocess`` -> ``aggregate``. Each stage is gated by its own ``enabled`` flag in
-the config.
+``export_matrix`` -> ``convolve`` -> ``sensor`` -> ``setup`` -> ``per_reference`` ->
+``tetrun`` -> ``postprocess`` -> ``aggregate``. Each stage is gated by its own ``enabled``
+flag in the config.
+
+EDITED 11/24/2027: added the optional ``per_reference`` stage (off unless
+``per_reference.enabled`` is set; a config without the section skips it).
 """
 
 import logging
@@ -60,6 +63,7 @@ def run(c: Box) -> None:
     2. convolve - Gaussian-convolve reference/research libraries to scene grid
     3. sensor - Integrate convolved library into tetracorder command tree
     4. setup - Configure tetracorder run (cmd-setup-tetrun)
+    4b. per_reference - Group 2 fit/depth/fd of every reference (EDITED 11/24/2027; optional)
     5. tetrun - Execute tetracorder (cmd.runtet)
     6. postprocess - Convert matched outputs to COGs and/or prune paths
     7. aggregate - Aggregate outputs into L2B mineral/uncertainty products
@@ -73,6 +77,7 @@ def run(c: Box) -> None:
         "convolve",
         "sensor",
         "setup",
+        "per_reference",  # EDITED 11/24/2027: optional stage, off unless per_reference.enabled
         "tetrun",
         "postprocess",
         "aggregate",
@@ -188,6 +193,33 @@ def setup(c: Box) -> None:
         geology     = c.setup.geology,
         cores       = c.setup.cores,
         args        = c.setup.args,
+    )
+
+
+@utils.log_elapse
+def per_reference(c: Box) -> None:
+    """
+    Write every group 2 reference's own fit, depth and fd at every pixel (EDITED 11/24/2027).
+
+    A normal run keeps only the best reference of each group and writes zeros for the
+    others. This stage copies the run folder made by ``setup`` once per batch of group 2
+    references, edits each copy's command file so every batch reference sits alone in a
+    free group number (``per_reference.mode``: ``lean`` switches off every entry the batch
+    does not need, up to 28 references per run; ``conservative`` switches nothing off, up
+    to 19 per run), runs Tetracorder in each copy (``per_reference.jobs`` at a time), and
+    collects ``group2/<name>.{fit,depth,fd}.gz``, a stacked 200-band fd cube
+    (``group2_fd`` + ``.hdr``) and ``group2_references.csv`` under ``per_reference.output``.
+    The Tetracorder program and the ``setup`` run folder are not changed.
+    """
+    from tetrapy import per_reference
+
+    per_reference.run(
+        tetracorder = c.per_reference.tetracorder or c.output.tetracorder,
+        output      = c.per_reference.output,
+        rfl         = c.data.rfl,
+        mode        = c.per_reference.mode or "lean",
+        jobs        = int(c.per_reference.jobs or 1),
+        keep_runs   = bool(c.per_reference.keep_runs),
     )
 
 

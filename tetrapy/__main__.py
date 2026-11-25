@@ -86,6 +86,16 @@ def setup(ctx: click.Context, **kwargs: Any) -> None:
     pl.setup(c)
 
 
+# EDITED 11/24/2027: subcommand for the optional per_reference stage
+@cli.command(context_settings=CS, help=pl.per_reference.__doc__)
+@click.pass_context
+@Config
+@Section
+def per_reference(ctx: click.Context, **kwargs: Any) -> None:
+    c = init(ctx=ctx, **kwargs)
+    pl.per_reference(c)
+
+
 @cli.command(context_settings=CS, help=pl.tetrun.__doc__)
 @click.pass_context
 @Config

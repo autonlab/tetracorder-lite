@@ -276,6 +276,7 @@ flag in the config, so you can run any subset:
 | Convolve | `convolve` | Convolve the reference + research master libraries onto the scene's instrument grid |
 | Sensor | `sensor` | Wire the convolved libraries into the tetracorder command tree (restart, deleted-channels, enable/disable, datasets, and color files) |
 | Setup | `setup` | Configure a tetracorder run (`cmd-setup-tetrun`) |
+| Per-reference (EDITED 11/24/2027) | `per_reference` | Optional, off by default: fit, depth and fd of every group 2 reference at every pixel (see [Per-reference outputs](#per-reference-outputs-group-2)) |
 | Tetrun | `tetrun` | Execute the configured run (`cmd.runtet`), logging to `{output.tetracorder}/tetrun.log` |
 | Postprocess | `postprocess` | Convert matched tetracorder outputs into COGs and/or delete matched paths |
 | Aggregate | `aggregate` | Aggregate tetracorder outputs into L2B mineral/uncertainty products |
@@ -283,6 +284,88 @@ flag in the config, so you can run any subset:
 Setup removes `output.tetracorder` first if it already exists, since
 `cmd-setup-tetrun` requires it to be absent. When `log.config` is set, the resolved
 config is written there for provenance.
+
+## Per-reference outputs (group 2)
+
+> **EDITED 11/24/2027:** new optional stage `per_reference`, new module `tetrapy/per_reference.py`,
+> new tests `tests/test_per_reference.py`. Off by default; existing configs run unchanged.
+
+**What it gives you.** For every one of the 200 group 2 references, its own fit, depth
+and fd (fit × depth) at every pixel, instead of only the group's winner.
+
+**Why a normal run cannot.** Within a group, Tetracorder computes fit and depth of every
+enabled reference at every pixel, then keeps only the group's best reference and sets
+every other reference of that group to 0 before the images are written (`tp1all.r`). So
+a normal run's group 2 images hold, at each pixel, the winner's values and zeros for the
+other 199. A reference that is alone in its group is always that group's best, so its own
+values are written wherever its own rules pass.
+
+**What the stage does.** The Tetracorder program is not changed, and neither is the run
+folder made by `setup`. The stage:
+
+1. copies the `setup` run folder once per batch of group 2 references;
+2. in each copy, edits the run folder's copy of the expert-system command file
+   (`cmd.lib.setup.t6.00a6`): each batch reference's line `group 2` becomes a free group
+   number of its own (`group 39`, `group 40`, ...), the header's group count goes from 38
+   to 50 with an output path (group 2's folder) and a name for each new group, and the new
+   groups are switched on in `DISABLE/force-disable.txt`; the edited file is re-read and
+   checked (each batch reference alone in its group, every NOT test still pointing at the
+   same reference) before Tetracorder starts;
+3. runs Tetracorder in each copy as `cmd.runtet` does (`tetracorder6.00 r1` reading
+   `cmds.start.t6.00a`), `jobs` copies at a time, without `cmd.runtet`'s picture steps;
+4. collects the images and stacks the fd images (below).
+
+Tetracorder allows 50 groups (`maxgrp = 50` in `multmap.h`); the stock command file uses
+22, so 28 group numbers are free. That limits how many references one run can take.
+
+**The two modes.**
+
+| Mode | References per run (runs for group 2) | What else stays on | Speed | Use |
+|---|---|---|---|---|
+| `lean` (default) | up to 28 (8 runs) | Only what the batch needs: the batch references, plus every entry that one of their NOT tests refers to (followed through the entries those refer to). Every other entry gets `use= no`. A referenced entry of group 0 is moved into group 2, so nothing of group 0 competes with the batch. | fast | normal use |
+| `conservative` | up to 19 (11 runs) | Everything: nothing is switched off or moved except the batch references. Their new group numbers are added to the `nogroup0:` line so group 0 does not compete with them; that 80-column line is what limits a run to 19. | slow (every entry runs) | checking that `lean` gives the same numbers |
+
+A NOT test says "reject this reference if reference X fits better"; `lean` keeps X on so
+each test compares against the same reference as in a normal run.
+
+**Outputs** (under `per_reference.output`):
+
+| Path | Content |
+|---|---|
+| `group2/<name>.fit.gz`, `.depth.gz`, `.fd.gz` | Tetracorder's own images for each reference, bytes unchanged (gzip-compressed, as a normal run's group folders are): a label of whole records, then one unsigned byte per pixel. fit is stored as fit × 255; depth and fd as value × 255 / X, X = the reference's `8 DN 255 = X`. A reference Tetracorder disables for the sensor writes no images. |
+| `group2_fd`, `group2_fd.hdr` | the 200 fd images stacked into one ENVI cube: uint8, BIP, band k = group 2 reference k in command-file order; a reference without images is a band of zeros. `map info` / `coordinate system string` copied from the reflectance header. |
+| `group2_references.csv` | band, name, ID, library, record, `depth_value_of_255` (X, resolved from the run folder's variables file), whether it wrote images |
+| `summary.json`, `logs/<mode>_<first>/` | per-run exit code, seconds, references, entries kept on; each run's edited command file, `regroup_report.json`, `tetracorder.out`, `history`, DISABLE file |
+
+**Running it.** Set `per_reference.enabled: True` (see [Configuration](#configuration)).
+It runs after `setup` and before `tetrun`; `tetrun` can stay on (a normal run as well) or
+be switched off. Or, after `setup`: `tetrapy per-reference config.yml`.
+
+```sh
+docker run --rm -v /path/to/scenes:/data -v /path/to/output:/output tetracorder-lite \
+  tetrapy run config.yml --data.rfl /data/<scene>_rfl --data.rfluncert /data/<scene>_uncert \
+    --per_reference.enabled True --per_reference.jobs 8 --tetrun.enabled False \
+    --postprocess.enabled False --aggregate.enabled False
+```
+
+Each run is a full Tetracorder pass over the scene with fewer entries switched on; a
+whole AVIRIS-5 scene (3,076 × 4,078 pixels, 8 lean runs, 8 at a time) took about 31
+minutes. Each run folder copy is the size of the `setup` run folder; they are deleted
+after collection unless `keep_runs` is set.
+
+**How it was checked.** Unit tests (`tests/test_per_reference.py`): the edit of the
+stock command file in both modes (each batch reference alone in a free group, NOT links
+unchanged, header, DISABLE file, batch sizes 8 × ≤28 and 11 × ≤19), refusal of too-large
+batches and of an already-edited file, and the whole stage with a stand-in Tetracorder
+program. Real data: a 300 × 300-pixel window (lines 300–599, samples 3000–3299) of the
+AVIRIS-5 scene `AV520250812t165629_000` (87,720 valid pixels), run with this stage in the
+tetracorder-lite image (`lean`, 8 runs, 8 at a time, 258 s), compared with an independent
+earlier full-scene run of the same method (scripts outside this repository, the same
+image), cropped to the window: for all 195 references with images, the fit, depth and fd
+images are byte-identical (0 differing pixels); the same 5 references wrote no images
+(disabled for this sensor); band order and `depth_value_of_255` agree with that run's
+reference table; the stacked fd cube is identical (2,315,155 non-zero values; every valid
+pixel has at least one reference with fd > 0).
 
 ## Configuration
 
@@ -359,6 +442,14 @@ setup:
   geology: False
   args:    ["1", "-T", "-20", "80", "C", "-P", ".5", "1.5", "bar"]
   # cores: 8                      # Optional; defaults to os.cpu_count()
+
+per_reference:                      # EDITED 11/24/2027: optional; see "Per-reference outputs (group 2)"
+  enabled:     False
+  tetracorder: ${output.tetracorder}  # run folder made by setup (copied, not changed)
+  output:      ${output.base}/per_reference
+  mode:        lean                   # lean (<= 28 references per run) | conservative (<= 19, nothing switched off)
+  jobs:        1                      # Tetracorder runs at the same time
+  keep_runs:   False                  # keep the per-batch run folders under output/runs/
 
 tetrun:
   enabled: True
@@ -511,6 +602,7 @@ as `run`:
 | `convolve` | Convolve the spectral libraries onto a scene's grid |
 | `sensor` | Wire the convolved libraries into the tetracorder command tree |
 | `setup` | Configure a tetracorder run only (`cmd-setup-tetrun`) |
+| `per-reference` | (EDITED 11/24/2027) Fit, depth and fd of every group 2 reference, from a set-up run folder |
 | `tetrun` | Execute a previously-configured run (`cmd.runtet`) |
 | `postprocess` | Convert matched tetracorder outputs into COGs and/or delete matched paths |
 | `aggregate` | Aggregate tetracorder outputs into L2B mineral/uncertainty products |
@@ -653,6 +745,7 @@ tetracorder-lite/
     postprocess.py       #   COG conversion (optionally orthorectified) + output pruning
     aggregate.py         #   L2B mineral/uncertainty product aggregation
     tetracorder.py       #   expert-system command-file decoder
+    per_reference.py     #   group 2 per-reference fit/depth/fd (EDITED 11/24/2027)
     utils.py             #   shared helpers
     conv/                #   specpr I/O + Gaussian convolution internals
     data/                #   mineral grouping matrices
